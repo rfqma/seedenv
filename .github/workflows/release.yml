@@ -1,0 +1,139 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_exists: ${{ steps.check-tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: get version from cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | awk -F'"' '{print $2}')
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+          echo "current version: v$VERSION"
+
+      - name: check if tag exists
+        id: check-tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.tag_exists == 'false'
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: seedenv
+            artifact_name: seedenv-macos-x86_64
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: seedenv
+            artifact_name: seedenv-macos-aarch64
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: seedenv
+            artifact_name: seedenv-linux-x86_64
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: seedenv.exe
+            artifact_name: seedenv-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: strip binary (unix)
+        if: runner.os != 'Windows'
+        run: strip target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+
+      - name: rename artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} "dist/${{ matrix.artifact_name }}"
+          ls -la dist/
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}
+
+  release:
+    name: create release
+    needs: [check-version, build]
+    if: needs.check-version.outputs.tag_exists == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: flatten artifacts
+        run: |
+          mkdir -p release-artifacts
+          find artifacts -type f -exec cp {} release-artifacts/ \;
+          ls -la release-artifacts/
+
+      - name: create tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag ${{ needs.check-version.outputs.version }}
+          git push origin ${{ needs.check-version.outputs.version }}
+
+      - name: create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          files: release-artifacts/*
+          draft: false
+          prerelease: false
+          body: |
+            🌱 ${{ needs.check-version.outputs.version }}
+
+            ### install
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/rfqma/seedenv/main/install.sh | bash
+            ```
+
+            ### release Notes
+            -
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

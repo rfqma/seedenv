@@ -1,0 +1,20 @@
+[package]
+name = "seedenv"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+futures = "0.3.31"
+reqwest = {version = "0.12.23", features = ["json"]}
+serde = {version = "1.0.228", features = ["derive"]}
+serde_json = "1.0.145"
+tokio = {version = "1.47.1", features = ["macros", "rt-multi-thread"]}
+base64 = "0.22.0"
+sodiumoxide = "0.2.7"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
